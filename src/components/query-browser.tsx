@@ -845,11 +845,11 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
               });
             },
           );
-          setGraphData(newGraphData);
 
           _.each(newResults, (r, i) =>
             dispatch(queryBrowserPatchQuery(i, { series: r ? _.map(r, 'metric') : undefined })),
           );
+          setGraphData(newGraphData);
           setUpdating(false);
         }
         setError(undefined);

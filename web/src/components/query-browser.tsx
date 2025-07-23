@@ -1,6 +1,3 @@
-import classNames from 'classnames';
-import * as _ from 'lodash-es';
-import * as React from 'react';
 import {
   PrometheusEndpoint,
   PrometheusLabels,
@@ -34,8 +31,12 @@ import {
   InputGroup,
   TextInput,
   Title,
+  Tooltip as PFTooltip,
 } from '@patternfly/react-core';
 import { ChartLineIcon } from '@patternfly/react-icons';
+import classNames from 'classnames';
+import * as _ from 'lodash-es';
+import * as React from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDispatch, useSelector } from 'react-redux';
 import { VictoryPortal } from 'victory-core';
@@ -53,12 +54,11 @@ import { getPrometheusURL } from './console/graphs/helpers';
 import {
   dateFormatterNoYear,
   dateTimeFormatterWithSeconds,
-  timeFormatter,
-  timeFormatterWithSeconds,
-
   // TODO: These will be available in future versions of the plugin SDK
   formatPrometheusDuration,
   parsePrometheusDuration,
+  timeFormatter,
+  timeFormatterWithSeconds,
 } from './console/utils/datetime';
 import { usePoll } from './console/utils/poll-hook';
 import { useRefWidth } from './console/utils/ref-width-hook';
@@ -504,7 +504,9 @@ const formatSeriesValues = (
   samples: number,
   span: number,
   defaultEmptyValue: 0 | null,
-): GraphDataPoint[] => {
+  createGaps: boolean,
+): { points: GraphDataPoint[]; hasDisconnectedValues: boolean } => {
+  let hasDisconnectedValues = false;
   const newValues = _.map(values, (v) => {
     const y = Number(v[1]);
     return {
@@ -513,7 +515,8 @@ const formatSeriesValues = (
     };
   });
 
-  // The data may have missing values, so we fill those gaps with nulls so that the graph correctly
+  // The data may have missing values, if disconnected is enabled,
+  // we fill those gaps with nulls so that the graph correctly
   // shows the missing values as gaps in the line
   const start = Number(_.get(newValues, '[0].x'));
   const end = Number(_.get(_.last(newValues), 'x'));
@@ -521,11 +524,14 @@ const formatSeriesValues = (
   _.range(start, end, step).forEach((t, i) => {
     const x = new Date(t);
     if (_.get(newValues, [i, 'x']) > x) {
-      newValues.splice(i, 0, { x, y: null });
+      hasDisconnectedValues = true;
+      if (createGaps) {
+        newValues.splice(i, 0, { x, y: null });
+      }
     }
   });
 
-  return newValues;
+  return { points: newValues, hasDisconnectedValues };
 };
 
 // Try to limit the graph to this number of data points
@@ -670,6 +676,7 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
   queries,
   showLegend,
   showStackedControl = false,
+  showDisconnectedControl = true,
   timespan,
   units,
   onDataChange,
@@ -709,6 +716,8 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
   const safeFetch = useSafeFetch();
 
   const [isStacked, setIsStacked] = React.useState(isStack);
+  const [showDisconnectedValues, setIsShowDisconnectedValues] = React.useState(false);
+  const [isDisconnectedEnabled, setIsDisconnectedEnabled] = React.useState(true);
 
   const canStack = _.sumBy(graphData, 'length') <= maxStacks;
 
@@ -820,6 +829,8 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
           maxSamplesForSpan,
         );
 
+        let dataIsDisconnected = false;
+
         // Change `samples` if either
         //   - It will change by a proportion greater than `samplesLeeway`
         //   - It will change to the upper or lower limit of its allowed range
@@ -847,13 +858,25 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
                     );
                     defaultEmptyValue = 0;
                   }
-                  return [metric, formatSeriesValues(values, samples, span, defaultEmptyValue)];
+                  const { points, hasDisconnectedValues } = formatSeriesValues(
+                    values,
+                    samples,
+                    span,
+                    defaultEmptyValue,
+                    showDisconnectedValues,
+                  );
+
+                  dataIsDisconnected = hasDisconnectedValues;
+
+                  return [metric, points];
                 }
               });
             },
           );
           setGraphData(newGraphData);
           onDataChange?.(newGraphData);
+
+          setIsDisconnectedEnabled(dataIsDisconnected);
 
           _.each(newResults, (r, i) =>
             dispatch(queryBrowserPatchQuery(i, { series: r ? _.map(r, 'metric') : undefined })),
@@ -894,6 +917,7 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
     samples,
     span,
     lastRequestTime,
+    showDisconnectedValues,
   );
 
   React.useLayoutEffect(() => setUpdating(true), [endTime, namespace, queriesKey, samples, span]);
@@ -995,6 +1019,26 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
                 label={t('Stacked')}
                 onChange={(v) => setIsStacked(v)}
               />
+            )}
+            {showDisconnectedControl && (
+              <PFTooltip
+                content={
+                  <div>
+                    {isDisconnectedEnabled
+                      ? t('Check to show gaps for missing data')
+                      : t('No gaps found in the data')}
+                  </div>
+                }
+              >
+                <Checkbox
+                  id="disconnected"
+                  isChecked={isDisconnectedEnabled && showDisconnectedValues}
+                  data-checked-state={isDisconnectedEnabled && showDisconnectedValues}
+                  label={t('Disconnected')}
+                  onChange={(v) => setIsShowDisconnectedValues(v)}
+                  isDisabled={!isDisconnectedEnabled}
+                />
+              </PFTooltip>
             )}
           </div>
         </div>
@@ -1099,6 +1143,7 @@ export type QueryBrowserProps = {
   queries: string[];
   showLegend?: boolean;
   showStackedControl?: boolean;
+  showDisconnectedControl?: boolean;
   timespan?: number;
   units?: string;
   onDataChange?: (data: any) => void;

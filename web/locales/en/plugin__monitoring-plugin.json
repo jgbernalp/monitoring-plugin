@@ -184,7 +184,7 @@
   "{{count}} hour_other": "{{count}} hours",
   "{{count}} day_one": "{{count}} day",
   "{{count}} day_other": "{{count}} days",
-  "Alert Name": "Alert Name",
+  "Alert": "Alert",
   "Start": "Start",
   "End": "End",
   "Incidents": "Incidents",

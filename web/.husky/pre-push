@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+. "$(dirname -- "$0")/_/husky.sh"
+
+echo "Checking for missing translations..."
+cd web
+npm run i18n > /dev/null 2>&1
+
+# Check if there are any changes after running i18n
+if ! git diff --quiet --exit-code; then
+  echo "❌ Missing translations detected! Please run 'npm run i18n' and commit the changes."
+  echo "Files with missing translations:"
+  git diff --name-only
+  exit 1
+fi
+
+echo "✅ All translations are up to date"

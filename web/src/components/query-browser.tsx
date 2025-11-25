@@ -32,6 +32,8 @@ import {
   TextInput,
   Title,
   Tooltip as PFTooltip,
+  Split,
+  SplitItem,
 } from '@patternfly/react-core';
 import { ChartLineIcon } from '@patternfly/react-icons';
 import classNames from 'classnames';
@@ -1010,8 +1012,13 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
             />
             {updating && <Loading />}
           </div>
-          <div className="query-browser__controls--right">
-            {GraphLink && <GraphLink />}
+          <Split hasGutter>
+            {GraphLink && (
+              <SplitItem>
+                <GraphLink />{' '}
+              </SplitItem>
+            )}
+
             {canStack && showStackedControl && (
               <Checkbox
                 id="stacked"
@@ -1041,7 +1048,7 @@ const QueryBrowser_: React.FC<QueryBrowserProps> = ({
                 />
               </PFTooltip>
             )}
-          </div>
+          </Split>
         </div>
       )}
       <div

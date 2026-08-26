@@ -28,6 +28,8 @@ const config: Configuration = {
       // Stub them out during development builds to prevent webpack resolution errors.
       '@console/internal': false,
       '@console/shared': false,
+      // Alias for all source modules — use @/ instead of relative imports.
+      '@': path.resolve(__dirname, 'src'),
     },
   },
   module: {
@@ -95,6 +97,7 @@ const config: Configuration = {
         ? { ...pkg.consolePlugin, name: process.env.CONSOLE_PLUGIN_NAME }
         : undefined,
       validateExtensionIntegrity: false,
+      extensions: [],
     }),
     new CopyWebpackPlugin({
       patterns: [
@@ -104,7 +107,9 @@ const config: Configuration = {
             if (!absoluteFilename) {
               return 'locales/[path][name][ext]';
             }
-            const i18nNamespace = `plugin__${process.env.CONSOLE_PLUGIN_NAME ?? 'monitoring-plugin'}`;
+            const i18nNamespace = `plugin__${
+              process.env.CONSOLE_PLUGIN_NAME ?? 'monitoring-plugin'
+            }`;
             const relativePath = path.relative(
               path.resolve(__dirname, 'locales'),
               absoluteFilename,
@@ -133,6 +138,16 @@ const config: Configuration = {
   stats: {
     errorDetails: true,
   },
+  ignoreWarnings: [
+    (warning) => {
+      // Since we are adding all features in dynamically on the backend, we want to
+      // suppress the warning that what were are building does not have any extensions
+      if (warning.message === 'Plugin has no extensions') {
+        return true;
+      }
+      return false;
+    },
+  ],
 };
 
 if (process.env.NODE_ENV === 'production') {

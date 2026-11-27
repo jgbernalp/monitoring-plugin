@@ -19,15 +19,11 @@ The suite SHALL verify that an admin can find a fixture alert that fires immedia
 The suite SHALL verify that a namespace-admin user sees and can silence only alerts in their namespace, and cannot see alerts or silences belonging to namespaces they have no access to.
 
 #### Scenario: Namespace admin manages own alert
-- **GIVEN** a user who is admin of one test namespace, a fixture alert firing in that namespace, a fixture alert firing in a namespace the user cannot access, and a silence named `private-silence` that targets the inaccessible alert
+- **GIVEN** a user who is admin of one test namespace, a fixture alert firing in that namespace, a fixture alert firing in a namespace the user cannot access, and a silence named `private-silence` in that inaccessible namespace that matches no firing alert
 - **WHEN** the user selects their namespace and filters for the inaccessible alert
 - **THEN** that alert is not shown
 - **AND** the user can silence their fixture alert, see it as Silenced, expire the silence, and see it as Firing again
 - **AND** searching the silences list for `private-silence` shows no result
-
-#### Scenario: Group-based namespace admin
-- **WHEN** a user's admin access to the namespace comes from group membership instead of a direct binding
-- **THEN** this case is out of scope for this change and is recorded as a follow-up
 
 ### Requirement: Namespace-scoped metrics access
 The suite SHALL verify that a user with metrics access to exactly two namespaces can query metrics in each of them through the Metrics page, and cannot read metrics from a namespace they have no access to.
@@ -46,11 +42,11 @@ The suite SHALL verify that a user with metrics access to exactly two namespaces
 - **THEN** no series from that namespace are shown, and the page shows the access error or empty result returned by the backend
 
 ### Requirement: Legacy dashboard permissions for non-admins
-The suite SHALL verify that a user with monitoring view in one namespace can open namespace-scoped legacy dashboards with data for that namespace, and cannot view dashboard data for namespaces they lack access to.
+The suite SHALL verify that a user with monitoring view in some namespaces can open namespace-scoped legacy dashboards with data for a permitted namespace, and cannot view dashboard data for namespaces they lack access to.
 
 #### Scenario: Permitted namespace dashboard
-- **GIVEN** a user with monitoring view in one test namespace
-- **WHEN** the user opens the Dashboards page with that namespace selected and picks a namespace-scoped dashboard
+- **GIVEN** a user with monitoring view in two test namespaces and no access to a third
+- **WHEN** the user opens the Dashboards page with a permitted namespace selected and picks a namespace-scoped dashboard
 - **THEN** its panels render data for that namespace
 
 #### Scenario: Cluster-only dashboards and forbidden namespaces
@@ -96,5 +92,5 @@ The suite SHALL verify, as the admin, that each console entry point into the plu
 On a prepared cluster with two parallel workers, the `@smoke` subset SHALL complete in under 5 minutes and the full monitoring suite in under 15 minutes. Environment setup is excluded from both budgets.
 
 #### Scenario: Full run duration
-- **WHEN** the full monitoring suite runs against a prepared `remote` or `ci` environment
+- **WHEN** the full monitoring suite runs against a prepared personal or CI cluster
 - **THEN** the reported wall-clock duration is under 15 minutes

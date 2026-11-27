@@ -15,9 +15,9 @@ To let automated CVE PRs merge on their own and let agents change code without r
   - **One command** (`hack/env/setup.sh`) for a personal cluster, a local frontend, DevSpace, and CI. It detects what it needs (console URL, auth, user source) instead of asking for an environment name.
   - **Plan before apply:** it checks every needed step, prints a plan, refuses to start if any step is blocked, then applies only what is missing.
   - **Scoped to the selected suites:** each suite declares the steps and roles it needs, and setup prepares only those. For example, `metrics` never touches user workload monitoring.
-  - **Six small steps, one file each:** `plugin-image`, `users`, `namespaces`, `rbac`, `uwm`, and `alert-rules`. Each has a check, an apply, and a teardown, and each can run on its own. The order is listed in one place.
+  - **Six small steps, one file each** in `hack/env/steps/`: `plugin-image`, `users`, `namespaces`, `rbac`, `uwm`, and `alert-rules`. Each has a check, an apply, and a teardown, and each can run on its own. The order is listed in one place.
   - **Full or partial teardown** through recorded ownership, so different setups can be swapped on the same cluster.
-  - **Test users**, first match wins:
+  - **Test users** for three roles (admin, namespace admin, namespace viewer), always all assigned so a user keeps its role across runs. First match wins:
     1. a provided pool, auto-detected from the CI files of `hypershift-hostedcluster-htpasswd` or `idp-htpasswd`;
     2. a local credentials file;
     3. users created on clusters with mutable OAuth, whose passwords stay on the runner's machine.
@@ -30,7 +30,7 @@ To let automated CVE PRs merge on their own and let agents change code without r
   - Traces on failure, plus JUnit and HTML reports.
 - **First coverage, the doc's monitoring flows:** admin and non-admin alerting (silence lifecycle and visibility), metrics across permitted and forbidden namespaces, legacy dashboard permissions, and console navigation entry points. Component-level Cypress checks aren't recreated.
 - **Selection:**
-  - Suites are folders, selected with `E2E_SUITE=<suites>`, or `affected`, which maps changed paths to suites.
+  - Suites are folders, selected with `E2E_SUITE=<suites>`, or `affected`, which maps changed paths to suites (locally; Prow uses `run_if_changed`).
   - `@smoke` is the only tag.
   - Known failures are annotated, not hidden.
   - A suite is skipped with a reason when setup didn't prepare what it needs.
@@ -55,7 +55,7 @@ To let automated CVE PRs merge on their own and let agents change code without r
 
 ## Impact
 
-- **New:** `hack/env/` (about 12 files), `web/e2e/` (config, `support/`, 4 suite folders, `suites.sh`, `run-ci.sh`, `Dockerfile`, README).
+- **New:** `hack/env/` (about 13 scripts and a README, plus bash tests), `web/e2e/` (config, `support/`, 4 suite folders, `run-ci.sh`, `Dockerfile`, README).
 - **Modified:**
   - `web/package.json`: `@playwright/test` and `eslint-plugin-playwright`, plus the `test:e2e*`, `e2e:browsers`, and `lint:tsc:e2e` scripts, and `./e2e` added to `lint`.
   - `web/eslint.config.ts`: E2E rules.
@@ -66,7 +66,7 @@ To let automated CVE PRs merge on their own and let agents change code without r
 - **Unchanged:** `web/cypress/**`, the Cypress scripts and jobs, the existing `hack/*.sh` scripts, and `make test-e2e` (Go).
 - **Cluster effects:** every change is decided by detection and by the selected suites, is idempotent and labeled or recorded, and is reversible by teardown. That covers role bindings, test namespaces and PrometheusRules, user workload monitoring, the CMO override and plugin image, and htpasswd users (mutable-OAuth clusters only).
 - **Follow-ups:**
-  - A Prow job: the `hypershift-hostedcluster-htpasswd` workflow, or `idp-htpasswd` on a claimed cluster.
+  - Prow jobs, one per suite with `run_if_changed`: the `hypershift-hostedcluster-htpasswd` workflow, or `idp-htpasswd` on a claimed cluster.
   - More than 5 CI users for the later Perses RBAC suite.
   - Operator steps and the COO, Incidents, Logging, Tracing, Troubleshooting, Perses, and Virtualization suites.
   - The group-based namespace-admin case.

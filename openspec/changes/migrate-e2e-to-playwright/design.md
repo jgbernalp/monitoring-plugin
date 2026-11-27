@@ -30,30 +30,27 @@ See proposal.md for the motivation and the team doc *Monitoring plugin: Testing 
 
 ```
 hack/env/
-├── README.md               # how it works, common scenarios (D14), step template
+├── README.md               # how it works, common scenarios (D14), step template (incl. future operator steps)
 ├── setup.sh                # context → needed steps → plan → apply → preflight → env file
 ├── teardown.sh             # [step...] → add dependents → step_teardown in reverse order
-├── preflight.sh            # read-only checks, usable standalone
+├── preflight.sh            # read-only checks no step owns (API, console, plugin served); usable standalone
 ├── lib/
 │   ├── common.sh           # log, die, require_tool, wait_until, read_secret, labels, state ConfigMap, env file writer
-│   └── steps.sh            # STEPS list, context, dependency expansion, plan printing, step_main
-├── users-rbac/
-│   ├── users.sh            # step: users
-│   ├── create-users.sh     # helper used by users.sh (also runnable alone); clusters with mutable OAuth only
-│   └── rbac.sh             # step: rbac
-├── operators/README.md     # template for future operator steps
-├── patching/plugin-image.sh  # step: plugin-image (includes the CMO unmanaged override)
-└── fixtures/
-    ├── namespaces.sh       # step: namespaces
-    ├── uwm.sh              # step: uwm
-    └── alert-rules.sh      # step: alert-rules
+│   ├── steps.sh            # STEPS list, context, dependency expansion, plan printing, step_main
+│   └── suites.sh           # resolve <E2E_SUITE> | affected [base]; reads web/e2e/<suite>/requires.env
+└── steps/
+    ├── plugin-image.sh     # includes the CMO unmanaged override
+    ├── users.sh            # resolve the pool, or create users (mutable-OAuth clusters only)
+    ├── namespaces.sh
+    ├── rbac.sh
+    ├── uwm.sh
+    └── alert-rules.sh
 
 web/e2e/
 ├── playwright.config.ts
 ├── tsconfig.json
 ├── README.md               # placement policy, conventions, coverage map, CI image contract
 ├── Dockerfile
-├── suites.sh               # resolve <E2E_SUITE> | affected [base]   (bash)
 ├── run-ci.sh               # container entrypoint
 ├── support/
 │   ├── env.ts              # env file + process.env → typed config
@@ -69,9 +66,11 @@ web/e2e/
 └── navigation/    { requires.env, console-entry-points.e2e.spec.ts }
 ```
 
-Pure-logic bash functions get `*.test.sh` files next to them: pool parsing in `users.sh`, dependency expansion in `steps.sh`, and resolution and affected mapping in `suites.sh`. `make test-shell` runs them all.
+Pure-logic bash functions get `*.test.sh` files next to them: pool parsing in `steps/users.sh`, dependency expansion in `lib/steps.sh`, and resolution and affected mapping in `lib/suites.sh`. `make test-shell` runs them all.
 
-*Why two homes:* `hack/env/` also serves local development without tests, and sits next to the existing `hack/*.sh`. `web/e2e/` reuses `node_modules` and the `@/` alias for `DataTestIDs`.
+*Why two homes:* `hack/env/` holds all bash, also serves local development without tests, and sits next to the existing `hack/*.sh`. `web/e2e/` holds only TypeScript and the per-suite `requires.env`, and reuses `node_modules` and the `@/` alias for `DataTestIDs`.
+
+*Why a flat `steps/` folder:* six steps don't need categories, and a direct run is always `hack/env/steps/<name>.sh`.
 
 ### D2. Environment contract
 `setup.sh` writes `web/e2e/.env.e2e` (git-ignored, mode 600, path overridable with `E2E_ENV_FILE`). `support/env.ts` parses it with Node's `util.parseEnv` and merges it under `process.env`, so exported variables win.
@@ -79,16 +78,17 @@ Pure-logic bash functions get `*.test.sh` files next to them: pool parsing in `u
 | Variable | Set by | Meaning |
 |---|---|---|
 | `E2E_BASE_URL` | caller / detected | console URL. Default: the cluster's `console` route |
-| `E2E_AUTH_DISABLED` | caller / detected | the local bridge runs without auth |
+| `E2E_AUTH_DISABLED` | caller / detected | the local bridge runs without auth; `ADMIN` is then implicit (D8) |
 | `E2E_PLUGIN_URL` | caller | local plugin base, default `http://localhost:9443` |
 | `E2E_USERS`, `E2E_USERS_FILE` | caller / CI | provided user pool (D5) |
 | `E2E_IDP` | caller | only needed when several non-`kube:admin` providers exist (D8) |
 | `E2E_CREDENTIALS_FILE` | — | created-user credentials, default `web/e2e/.e2e-users` |
 | `E2E_PLUGIN_IMAGE` | caller | plugin image to deploy (D7) |
 | `E2E_NS_PREFIX` | caller | test namespace prefix, default `mp-e2e` |
-| `E2E_SUITE`, `E2E_GREP`, `E2E_BASE_REF` | caller | selection (D11), read by setup and by the runner |
+| `E2E_SUITE`, `E2E_BASE_REF` | caller | suite selection (D11), read by setup and by the runner |
+| `E2E_GREP` | caller | title/tag filter, read only by the runner; setup still prepares every selected suite |
 | `E2E_ARTIFACTS_DIR` | caller / CI | reports, default `web/e2e/test-results`; `$ARTIFACT_DIR` in CI |
-| `E2E_ROLE_<ROLE>_USER/_PASSWORD` | setup | roles: `ADMIN`, `ALERTING_NS_ADMIN`, `METRICS_TWO_NS`, `DASHBOARDS_VIEWER` |
+| `E2E_ROLE_<ROLE>_USER/_PASSWORD` | setup | roles: `ADMIN`, `ALERTING_NS_ADMIN`, `NS_VIEWER` |
 | `E2E_PREPARED` | setup | steps that are satisfied, e.g. `users,namespaces,rbac` |
 
 The names differ from the `CYPRESS_*` ones, so the two suites can't interfere.
@@ -105,30 +105,30 @@ step_teardown() { …; }   # reverts only what the state ConfigMap or labels say
 [[ ${BASH_SOURCE[0]} == "$0" ]] && { source "$(dirname "$0")/../lib/steps.sh"; step_main "$@"; }
 ```
 
-**Order is declared once** in `lib/steps.sh`, which maps each name to its file:
+**Order is declared once** in `lib/steps.sh`. Each name maps to `steps/<name>.sh`:
 
 ```bash
 STEPS=(plugin-image users namespaces rbac uwm alert-rules)
 ```
 
-Adding a step means one file plus one entry in this list. The list doubles as readable documentation of the order.
+Adding a step, including a future operator step, means one file in `steps/` plus one entry in this list. The list doubles as readable documentation of the order.
 
 | Step | Requires | Does |
 |---|---|---|
 | `plugin-image` | — | CMO unmanaged override + image patch (D7) |
 | `users` | — | resolve or create users, assign roles (D5) |
-| `namespaces` | — | every test namespace, with a pause pod (D6) |
+| `namespaces` | — | the 5 test namespaces, each with a pause pod (D6) |
 | `rbac` | users, namespaces | bindings per assigned role (D5) |
 | `uwm` | — | user workload monitoring (D6) |
-| `alert-rules` | uwm, namespaces | PrometheusRules, wait until firing (D6) |
+| `alert-rules` | uwm, namespaces | 2 PrometheusRules, wait until firing (D6) |
 
 **`setup.sh [--plan]`:**
-1. **Context** (D4) and **needed steps**. `suites.sh resolve` turns `E2E_SUITE` into suite folders. Their `requires.env` entries (`E2E_REQUIRES="<step>… role:<ROLE>…"`) are combined: `role:X` adds `X` to the needed roles and needs `users` and `rbac`. `plugin-image` is added when `E2E_PLUGIN_IMAGE` is set. `STEP_REQUIRES` is expanded transitively, and the result is filtered through `STEPS` to get the order.
+1. **Context** (D4) and **needed steps**. `lib/suites.sh resolve` turns `E2E_SUITE` into suite folders. Their `requires.env` entries (`E2E_REQUIRES="<step>… role:<ROLE>…"`) are combined: `role:X` adds `X` to the needed roles and needs `users` and `rbac` (unless auth is disabled, D8). A suite declares only its roles and the steps they don't already imply. For example, `metrics` declares only `role:NS_VIEWER`, since `rbac` pulls in `namespaces`. `plugin-image` is added when `E2E_PLUGIN_IMAGE` is set. `STEP_REQUIRES` is expanded transitively, and the result is filtered through `STEPS` to get the order.
 2. **Plan.** `step_check` runs for each needed step and the table is printed. If any step is blocked, setup exits non-zero without applying anything. `--plan` stops here.
-3. **Apply.** `step_apply` runs for each `apply` step in order, then `step_check` again, which must report `satisfied`.
-4. **Preflight** (`preflight.sh`), then the env file is written, with `E2E_PREPARED` set to the satisfied steps.
+3. **Apply.** `step_apply` runs for each `apply` step in order, then `step_check` again, which must report `satisfied`. This post-apply check is the verification for every step, so a second run with the same selection reports every step as `satisfied` and changes nothing.
+4. **Preflight** (`preflight.sh`) checks only what no step owns: the API, the console, and the plugin being enabled and serving its manifest. Then the env file is written, with `E2E_PREPARED` set to the satisfied steps.
 
-**Direct run.** `hack/env/<cat>/<step>.sh [--check|--teardown]` calls `step_main`. It loads the context, requires the step's dependencies to be satisfied (naming the ones that aren't), then checks and applies, checks only, or tears down that step.
+**Direct run.** `hack/env/steps/<step>.sh [--check|--teardown]` calls `step_main`. It loads the context, requires the step's dependencies to be satisfied (naming the ones that aren't), then checks and applies, checks only, or tears down that step.
 
 **`teardown.sh [step...]`.** With no arguments it covers every step recorded as prepared. With arguments, it adds every prepared step that depends on a named one, for example `uwm` pulls in `alert-rules`. It then runs `step_teardown` in reverse `STEPS` order, expires test-marked silences, and on a full teardown deletes the credentials file for that cluster.
 
@@ -155,10 +155,11 @@ Each behavior follows its own detected fact. The plan header prints a descriptiv
 |---|---|---|
 | Console URL | `E2E_BASE_URL`, else the `console` route in `openshift-console` | preflight, env file |
 | Local console | `E2E_BASE_URL` is a localhost URL | preflight checks `E2E_PLUGIN_URL/plugin-manifest.json` instead of the console operator and console proxy |
-| Auth disabled | `E2E_AUTH_DISABLED`, else probe whether the local bridge redirects `/` to an OAuth login | env file → only `ADMIN` is usable |
+| Auth disabled | `E2E_AUTH_DISABLED`, else probe whether the local bridge redirects `/` to an OAuth login | needed steps (no `users`/`rbac`), env file → only an implicit `ADMIN` (D8) |
+| CMO scaled down | `cluster-monitoring-operator` has 0 replicas | `uwm`, `plugin-image`, plan header (`devspace`) |
 | CI user file | `${SHARED_DIR}/users`, then `${SHARED_DIR}/runtime_env` | `users` step |
 
-Facts that only one step needs stay inside that step: the control-plane topology (`users`), the UWM state (`uwm`), and whether CMO is scaled down (`uwm`, `plugin-image`).
+Facts that only one step needs stay inside that step: the control-plane topology (`users`) and the UWM state (`uwm`).
 
 ### D5. Users and RBAC
 **Sources, first match wins** (`users` step):
@@ -167,41 +168,42 @@ Facts that only one step needs stay inside that step: the control-plane topology
 |---|---|---|
 | 1 | `E2E_USERS` / `E2E_USERS_FILE`, else a CI user file (D4) | no |
 | 2 | `E2E_CREDENTIALS_FILE` whose header records the current API URL | no |
-| 3 | create users (`create-users.sh`), if `controlPlaneTopology` is not `External` | yes |
+| 3 | create users, if `controlPlaneTopology` is not `External` | yes |
 | — | none → **blocked**: "provide `E2E_USERS[_FILE]`, or use the hosted-cluster htpasswd or `idp-htpasswd` CI steps" | — |
 
 - **Parsing.** If a file contains `USERS=`, it is sourced in a subshell and only `USERS` is read. Otherwise each non-empty, non-comment line is one `user:pass`. Entries split on the first `:`. A malformed entry blocks the step and names its position. Passwords never appear in logs or the plan.
-- **Roles.** Only the needed roles are assigned, from the pool in the fixed order `ADMIN`, `ALERTING_NS_ADMIN`, `METRICS_TWO_NS`, `DASHBOARDS_VIEWER`. Roles left without a user are listed, and their tests skip. `ADMIN` is always a pool or created user bound to `cluster-admin`, never kubeadmin.
-- **Creation, in one code path.** When no credentials file matches the cluster, `create-users.sh`:
-  1. generates passwords with `openssl rand -base64 18` for `mp-e2e-admin`, `mp-e2e-alerting-ns-admin`, `mp-e2e-metrics-two-ns`, and `mp-e2e-dashboards-viewer`;
+- **Roles.** Every role is always assigned, regardless of the selected suites, from the pool in the fixed order `ADMIN`, `ALERTING_NS_ADMIN`, `NS_VIEWER`. So a user keeps the same role across runs with different selections, and only the `rbac` bindings follow the suites. Roles left without a user are listed, and their tests skip. `ADMIN` is always a pool or created user bound to `cluster-admin`, never kubeadmin.
+- **Creation, in one code path inside `steps/users.sh`.** When no credentials file matches the cluster, the step:
+  1. generates passwords with `openssl rand -base64 18` for all roles: `mp-e2e-admin`, `mp-e2e-alerting-ns-admin`, and `mp-e2e-ns-viewer`;
   2. writes `openssl passwd -apr1` hashes to a labeled secret in `openshift-config`, creating or replacing it;
   3. appends the `e2e-htpasswd` IDP to `oauth/cluster` if absent, and records it;
   4. waits until the first user can log in;
   5. writes the credentials file with mode 600 and the API URL header.
   
   The first run and a lost file are the same path.
-- **Bindings** (`rbac` step, labeled):
+- **Bindings** (`rbac` step, labeled, only for the needed roles):
 
   | Role | Binding |
   |---|---|
   | `ADMIN` | `cluster-admin` ClusterRoleBinding |
   | `ALERTING_NS_ADMIN` | `admin` in `${prefix}-alerting-user` |
-  | `METRICS_TWO_NS` | `view` in `${prefix}-metrics-a` and `-metrics-b`, nothing in `-metrics-c` |
-  | `DASHBOARDS_VIEWER` | `view` in `${prefix}-dashboards` |
+  | `NS_VIEWER` | `view` in `${prefix}-view-a` and `-view-b`, nothing in `-view-c`; used by the metrics and dashboards suites |
 
   If verification shows that `view` or `admin` doesn't grant tenancy access to alerts, add `monitoring-rules-view`.
-- **Pool size.** The hosted-cluster workflow creates 5 users, enough for 4 roles. The later Perses RBAC suite needs more, either through an upstream user-count parameter or by using `idp-htpasswd`.
+- **Pool size.** The hosted-cluster workflow creates 5 users, enough for the 3 roles. The later Perses RBAC suite needs more, either through an upstream user-count parameter or by using `idp-htpasswd`.
 
 *Alternative considered:* impersonation or ServiceAccount tokens. Rejected because RBAC must be exercised through real console login.
 
 ### D6. Fixtures
-- **`namespaces`:** `${prefix}-{alerting-admin,alerting-user,alerting-private,metrics-a,metrics-b,metrics-c,dashboards}`, labeled, each with a tiny pause Deployment so namespace-labeled series (`kube_pod_info`) exist. It waits until `kube_pod_info` is queryable for each namespace. All namespaces are created in one step because this is cheap (seconds), even for suites that use only some of them.
+- **`namespaces`:** `${prefix}-{alerting-admin,alerting-user,view-a,view-b,view-c}`, labeled, each with a tiny pause Deployment so namespace-labeled series (`kube_pod_info`) exist. It waits until `kube_pod_info` is queryable for each namespace. All namespaces are created in one step because this is cheap (seconds), even for suites that use only some of them.
 - **`uwm`:**
   - If `cluster-monitoring-config` is absent, create it with `enableUserWorkload: true`, record it, and wait for `prometheus-user-workload` and `thanos-ruler-user-workload`.
   - If it is already enabled, the step is `satisfied`.
   - If a config exists with it off, the step is blocked and shows the snippet to add. Setup doesn't edit YAML.
-  - If CMO has 0 replicas and UWM isn't running, the step is blocked with the remedy: "run `hack/env/setup.sh` before `devspace dev`, or `hack/scale-up-cmo.sh` temporarily".
-- **`alert-rules`:** one PrometheusRule (`vector(1)`, `for: 0s`, severity `warning`) in each alerting namespace: `MPE2EAdminAlert`, `MPE2EUserAlert`, and `MPE2EPrivateAlert`. It polls the Alertmanager v2 API (`oc exec` into `alertmanager-main-0`) until all three are active, with a timeout that names the alert.
+  - If CMO has 0 replicas and UWM isn't running, the step is blocked with the remedy: "end the DevSpace session (`devspace purge`), run `hack/env/setup.sh`, then start `devspace dev` again". Scaling CMO up mid-session isn't offered: `hack/scale-up-cmo.sh` removes every ClusterVersion override, and CMO then replaces the dev pod.
+- **`alert-rules`:** one PrometheusRule (`vector(1)`, `for: 0s`, severity `warning`) in each alerting namespace: `MPE2EAdminAlert` and `MPE2EUserAlert`. It polls the Alertmanager v2 API (`oc exec` into `alertmanager-main-0`) until both are active, with a timeout that names the alert.
+
+The non-admin flow needs no extra fixtures. `MPE2EAdminAlert` is its inaccessible alert, which it only reads. `private-silence` (D9) matches `alertname=MPE2EPrivateSilence` in `${prefix}-alerting-admin`, which no rule fires, so it never silences an alert another flow asserts on.
 
 *Why ahead of time:* UWM and alert propagation take minutes. Paying that once in setup, not per test, is the biggest runtime and flakiness win over Cypress.
 
@@ -225,21 +227,21 @@ Teardown restores the previous image and removes only an override this step reco
 4. dismisses the guided tour;
 5. saves `.auth/<role>.json`.
 
-When auth is disabled, it only dismisses the tour and produces `ADMIN`.
+When auth is disabled, there is no login. It only dismisses the tour and saves `.auth/ADMIN.json`, and `ADMIN` counts as assigned without a user.
 
-A spec selects its role with `useRole('ALERTING_NS_ADMIN')`. That sets `storageState` and skips the test with the role's name when the role has no user.
+A spec selects its role with `useRole('ALERTING_NS_ADMIN')`. That sets `storageState` and skips the test with the role's name when the role has no user. If the role isn't declared in the spec's suite `requires.env`, `useRole()` fails instead of skipping. Otherwise setup would never prepare it, and the test would be skipped forever without anyone noticing.
 
 ### D9. Test data through the console proxy
-`support/alertmanager.ts` uses an `APIRequestContext` built from a role's `storageState` against `/api/alertmanager[-tenancy]/api/v2/silences`, adding `X-CSRFToken` for mutations. The flows need only silences: `private-silence` setup, cleanup, and state cross-checks. Prometheus results are asserted through the UI.
+`support/alertmanager.ts` uses an `APIRequestContext` built from a role's `storageState` against `/api/alertmanager[-tenancy]/api/v2/silences`, adding `X-CSRFToken` for mutations. The flows need only silences: `private-silence` setup (D6), cleanup, and state cross-checks. Prometheus results are asserted through the UI.
 
 *Alternative considered:* shelling out to `oc` from tests. Rejected because it needs a kubeconfig and is slow.
 
 ### D10. Flow structure, isolation, and synchronization
-- **One test per flow.** Each flow is one `test()` with a `test.step()` per doc step. Flows use disjoint namespaces and alerts, so files run in parallel (`workers: 2` in CI) while staying serial within a file.
+- **One test per flow.** Each flow is one `test()` with a `test.step()` per doc step. Flows that change state use disjoint fixture alerts, so files run in parallel (`workers: 2` in CI) while staying serial within a file.
 - **Markers and cleanup.** A worker `runId` is used. Silences get `createdBy: monitoring-plugin-e2e` and `comment: e2e <runId> <flow>`. A test-scoped `cleanup` stack runs in fixture teardown, even after a failure.
 - **Navigation.** Tests open plugin routes directly with `page.goto('/monitoring/...')`. Only the navigation spec clicks through the console.
 - **Config:**
-  - `testDir: 'e2e'`, `testMatch: '**/*.e2e.spec.{ts,tsx}'`, `testIdAttribute: 'data-test'`
+  - `testDir: '.'` (the config lives in `web/e2e/`), `testMatch: '**/*.e2e.spec.{ts,tsx}'`, `testIdAttribute: 'data-test'`
   - timeouts: expect and action 15s, navigation 60s, test 180s
   - retries `CI ? 1 : 0`; `trace: 'retain-on-failure'`, `screenshot: 'only-on-failure'`, no video
   - reporters: `list`, `html`, and `junit`, all to `E2E_ARTIFACTS_DIR`
@@ -257,24 +259,26 @@ A spec selects its role with `useRole('ALERTING_NS_ADMIN')`. That sets `storageS
 |---|---|
 | Feature | the suite folder: `E2E_SUITE=alerting,metrics` |
 | Changed code | `E2E_SUITE=affected` (with `E2E_BASE_REF`, default `origin/main`) |
-| Critical path | `E2E_GREP=@smoke`, the only tag |
+| Critical path | `E2E_GREP=@smoke`, the only tag. Read by the runner only, so combine it with `E2E_SUITE` to scope setup too |
 | Environment | `requires.env` compared with `E2E_PREPARED` (below) |
 | Known failure | `test.fail()` / `test.fixme()` plus an `issue` annotation |
 
-- **`suites.sh resolve`** validates names against folders that have a `requires.env`, and fails listing the available suites. It is used by setup, `npm run test:e2e`, and `run-ci.sh`.
-- **`suites.sh affected [base]`** diffs `base...HEAD` through a `case` table:
+- **`lib/suites.sh resolve`** validates names against `web/e2e/` folders that have a `requires.env`, and fails listing the available suites. It is used by setup, `npm run test:e2e`, and `run-ci.sh`.
+- **`lib/suites.sh affected [base]`** needs a git work tree. Without one, it fails with "set `E2E_SUITE` explicitly". It diffs `base...HEAD` through a `case` table, first match per path wins:
 
   | Changed paths | Suites |
   |---|---|
+  | `*.md`, `docs/**`, Cypress-only paths | none |
+  | `web/e2e/<suite>/**` | `<suite>` |
   | `web/src/features/alerts/**` | `alerting` |
   | `web/src/features/metrics/**` | `metrics` |
   | `web/src/features/legacy-dashboards/**` | `legacy-dashboards` |
+  | other `web/src/features/**` (no suite yet) | `navigation` only |
   | shared and global paths (listed below) | all |
-  | `*.md`, `docs/**`, Cypress-only paths | none |
 
   Shared and global paths are `web/src/shared/**`, `web/e2e/support/**`, `web/e2e/playwright.config.ts`, `hack/env/**`, `config/*.patch.json`, `web/package*.json`, `pkg/**`, `cmd/**`, `go.*`, `Dockerfile*`, `web/webpack.config.ts`, and any unknown path. Any UI change also adds `navigation`. If nothing is selected, the command exits 0 with "nothing to run".
 - **Suite-level skip.** An automatic fixture in `support/test.ts` reads the current spec's `<suite>/requires.env` and skips the test, naming the missing step, when a declared step isn't in `E2E_PREPARED`. Roles are handled by `useRole()` (D8). No per-test calls or lint script are needed.
-- **Prow.** Each job (`/test e2e-<suite>`) is the same image with a different `E2E_SUITE`.
+- **Prow.** Each job (`/test e2e-<suite>`) is the same image with a different, explicit `E2E_SUITE`. Prow does the affected selection itself through each job's `run_if_changed` regex, which mirrors the `case` table. So the image needs no git history.
 
 *Alternatives considered:*
 - *Feature tags alongside folders.* Rejected because a second axis drifts from the folders, which is how the Cypress script matrix grew.
@@ -286,7 +290,7 @@ A spec selects its role with `useRole('ALERTING_NS_ADMIN')`. That sets `storageS
 - **`navigation.ts`** provides `navigateTo(page, ['Observe','Alerting'], 'Silences')` and `selectNamespace(page, ns)`, which waits for the route to reflect the namespace.
 
 ### D13. Entry points and CI image
-- **npm:** `test:e2e` (resolves `E2E_SUITE` through `suites.sh`), `test:e2e:ui` (UI mode), `e2e:browsers` (`playwright install chromium`), and `lint:tsc:e2e`. The `lint` script includes `./e2e`.
+- **npm:** `test:e2e` (resolves `E2E_SUITE` through `../hack/env/lib/suites.sh`), `test:e2e:ui` (UI mode), `e2e:browsers` (`playwright install chromium`), and `lint:tsc:e2e`. The `lint` script includes `./e2e`.
 - **Make:**
   - `make test-e2e-ui [E2E_SUITE=…] [E2E_GREP=…]`: `npm run e2e:browsers`, `hack/env/setup.sh`, then `npm run test:e2e`.
   - `make env-plan`: `hack/env/setup.sh --plan`.
@@ -301,12 +305,12 @@ A spec selects its role with `useRole('ALERTING_NS_ADMIN')`. That sets `storageS
   - entrypoint `run-ci.sh`.
 - **`run-ci.sh`:**
   1. runs `hack/env/setup.sh`, which detects the CI user file and uses `E2E_PLUGIN_IMAGE` if set;
-  2. runs `npm run test:e2e` with `E2E_SUITE`, which defaults to `affected` when `E2E_BASE_REF` is set and to all suites otherwise;
+  2. runs `npm run test:e2e` with the same `E2E_SUITE`, which defaults to all suites. `affected` is rejected here, since the image has no git history (D11);
   3. always copies reports to `$ARTIFACT_DIR`, keeping the test exit code.
 - **Prow (follow-up):** the `hypershift-hostedcluster-htpasswd` workflow is recommended, since it covers the cluster, users, and cleanup. The alternative is `cluster_claim` with `idp-htpasswd`.
 
 ### D14. Command examples
-These are also the README's "Common scenarios". Each is checked by running it (tasks 2.10 and 6.6).
+These are also the README's "Common scenarios". Each is checked by running it, once, in task 6.5.
 
 ```bash
 # 1. Personal cluster, first time (users get created)
@@ -321,27 +325,27 @@ make test-e2e-ui
 make test-e2e-ui E2E_SUITE=metrics
 
 # 4. Smoke tests, or the suites affected by your branch
-make test-e2e-ui E2E_GREP=@smoke
+make test-e2e-ui E2E_GREP=@smoke     # setup ignores E2E_GREP: add E2E_SUITE=navigation to prepare less
 make test-e2e-ui E2E_SUITE=affected E2E_BASE_REF=origin/main
 
 # 5. Test a PR image on your cluster
 make test-e2e-ui E2E_PLUGIN_IMAGE=quay.io/<you>/monitoring-plugin:pr-1234 E2E_SUITE=alerting
 
-# 6. Local frontend against a remote cluster (auth disabled → admin-only flows)
+# 6. Local frontend against a remote cluster (auth disabled → implicit admin, no users or RBAC prepared)
 make start-backend                   # terminal 1
 make start-console                   # terminal 2
 make test-e2e-ui E2E_BASE_URL=http://localhost:9000
 
 # 7. Bring your own users (e.g. a personal HyperShift cluster)
-E2E_USERS='alice:pw1,bob:pw2,carol:pw3,dave:pw4' make test-e2e-ui
+E2E_USERS='alice:pw1,bob:pw2,carol:pw3' make test-e2e-ui
 
 # 8. Re-run tests only, without setup
 cd web && E2E_SUITE=alerting npm run test:e2e
 
 # 9. Check, apply, or tear down a single step
-hack/env/fixtures/alert-rules.sh --check
-hack/env/fixtures/alert-rules.sh
-hack/env/fixtures/alert-rules.sh --teardown
+hack/env/steps/alert-rules.sh --check
+hack/env/steps/alert-rules.sh
+hack/env/steps/alert-rules.sh --teardown
 
 # 10. Switch setups on the same cluster, or clean up everything
 hack/env/teardown.sh uwm             # also removes alert-rules, which depends on it
@@ -362,12 +366,12 @@ Plan for example 3 on a fresh personal cluster:
 
 ```text
 cluster · https://console-openshift-console.apps.dev…
-suites   metrics → namespaces, role:METRICS_TWO_NS
+suites   metrics → role:NS_VIEWER
 
 STEP         STATUS   DETAIL
-users        apply    no pool or credentials file; OAuth mutable → create mp-e2e-metrics-two-ns
-namespaces   apply    7 test namespaces + pause pods
-rbac         apply    METRICS_TWO_NS: view in mp-e2e-metrics-a, mp-e2e-metrics-b
+users        apply    no pool or credentials file; OAuth mutable → create 3 users (all roles)
+namespaces   apply    5 test namespaces + pause pods
+rbac         apply    NS_VIEWER: view in mp-e2e-view-a, mp-e2e-view-b
 ```
 
 Plan for `E2E_SUITE=alerting` under DevSpace when UWM was never enabled. Nothing is applied:
@@ -379,7 +383,7 @@ users        satisfied  credentials file matches this cluster
 namespaces   satisfied
 rbac         satisfied
 uwm          blocked    CMO has 0 replicas, so UWM can't be deployed
-                        -- run hack/env/setup.sh before devspace dev, or hack/scale-up-cmo.sh temporarily
+                        -- devspace purge, run hack/env/setup.sh, then devspace dev again
 alert-rules  apply      (not applied: plan has blocked steps)
 ```
 
@@ -391,14 +395,15 @@ The README holds the unit/component/E2E decision table and a coverage map that s
 - **[Risk] UWM startup and alert propagation are slow.** → Mitigation: wait on actual Alertmanager state with a timeout that names the alert, and pay the cost once per cluster.
 - **[Risk] An existing `cluster-monitoring-config` has UWM off, or CMO is scaled down.** → Mitigation: the `uwm` step is blocked with a remedy and nothing is applied. This only matters for suites that need UWM.
 - **[Risk] The credentials file is lost, or belongs to a recreated cluster.** → Mitigation: the API URL header; a mismatch means new passwords and one OAuth rollout.
-- **[Risk] A CI step changes its user file format or IDP name.** → Mitigation: content-based parsing with bash tests for both formats, IDP auto-selection, override variables, and a preflight login per user.
-- **[Risk] The pool is too small, or the CI user step is still rolling out.** → Mitigation: roles without a user skip with a reason, and preflight checks each user's login.
+- **[Risk] A CI step changes its user file format or IDP name.** → Mitigation: content-based parsing with bash tests for both formats, IDP auto-selection, override variables, and an auth-setup login error that names the user and provider.
+- **[Risk] The pool is too small, or the CI user step is still rolling out.** → Mitigation: roles without a user skip with a reason, and auth setup fails naming any user whose login is rejected.
 - **[Risk] Built-in `view` or `admin` lacks tenancy access to alerts.** → Mitigation: verified in the RBAC task; add `monitoring-rules-view` if needed.
 - **[Risk] Under DevSpace, files sync mid-run, or the dev pod isn't serving yet.** → Mitigation: preflight fetches the manifest, the README says not to edit files during a run, and each context starts with a fresh cache.
 - **[Risk] Console-owned markup changes upstream.** → Mitigation: those locators are concentrated in one spec and the Page Objects, preferring role and name.
 - **[Risk] Built-in dashboard names change between OCP versions.** → Mitigation: names are constants, and assertions check that data is present.
-- **[Risk] The affected selector misses an indirect dependency.** → Mitigation: unknown paths run everything, and a full run happens on merge or nightly (Prow follow-up).
-- **[Trade-off] Every suite's setup creates all 7 test namespaces.** → They're empty and take seconds, in exchange for one simple step.
+- **[Risk] The affected selector misses an indirect dependency.** → Mitigation: unknown paths run everything, and a full run happens on merge or nightly (Prow follow-up). The Prow `run_if_changed` regexes can drift from the `case` table; the README lists both side by side.
+- **[Trade-off] Every suite's setup creates all 5 test namespaces, and every run assigns all 3 roles.** → Both are cheap, and they keep the step simple and the role→user mapping stable across selections.
+- **[Trade-off] The metrics and dashboards suites share `NS_VIEWER`.** → Neither changes state, and it leaves 2 spare users in the 5-user CI pool.
 - **[Trade-off] Coverage looks lower than Cypress during the transition.** → Mitigation: Cypress keeps running, and the README coverage map tracks each area.
 
 ## Migration Plan

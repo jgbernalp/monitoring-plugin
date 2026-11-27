@@ -73,7 +73,11 @@ The harness SHALL log each assigned role in through the console once per run, pe
 
 #### Scenario: Auth-disabled console
 - **WHEN** the console runs with user auth disabled
-- **THEN** login is skipped, and tests that select a non-admin role are skipped with a reason
+- **THEN** login is skipped, tests that select the admin role run with the console's own session, and tests that select a non-admin role are skipped with a reason
+
+#### Scenario: Role not declared by the suite
+- **WHEN** a test selects a role that its suite does not declare
+- **THEN** the test fails, naming the role and the suite's declaration file, instead of being skipped
 
 #### Scenario: Login fails
 - **WHEN** an assigned user's credentials are rejected
@@ -109,7 +113,7 @@ Tests SHALL wait only through auto-retrying assertions, or through explicit wait
 - **THEN** the frontend lint step reports an error
 
 ### Requirement: Test isolation and parallel safety
-Each user flow SHALL be independent of execution order. Different flows SHALL use disjoint fixture namespaces and alerts so that they can run in parallel. State a test changes SHALL carry a run-scoped marker and SHALL be cleaned up even when the test fails.
+Each user flow SHALL be independent of execution order. Flows that change state SHALL use disjoint fixture alerts, so that flows can run in parallel. State a test changes SHALL carry a run-scoped marker and SHALL be cleaned up even when the test fails.
 
 #### Scenario: Parallel flows
 - **WHEN** the admin and non-admin alerting flows run at the same time
@@ -138,7 +142,7 @@ Each suite folder SHALL declare the setup steps and roles it needs in a file rea
 - **THEN** suite resolution fails and names the folder
 
 ### Requirement: Suite selection by folder
-Suite folders SHALL be the only way to select tests by feature. The E2E entry points SHALL accept a comma-separated list of suites, the value `affected`, or nothing (all suites), and SHALL behave the same locally and in CI.
+Suite folders SHALL be the only way to select tests by feature. The E2E entry points SHALL accept a comma-separated list of suites, the value `affected`, or nothing (all suites), and SHALL behave the same locally and in CI. In CI, path-based selection SHALL be done by the CI system's per-job path filters, and the image SHALL receive explicit suites.
 
 #### Scenario: Run one suite
 - **WHEN** a caller selects suite `alerting`
@@ -149,10 +153,11 @@ Suite folders SHALL be the only way to select tests by feature. The E2E entry po
 - **THEN** the entry point exits non-zero before running tests and lists the available suites
 
 ### Requirement: Affected-suite selection
-Selecting `affected` SHALL map the files changed against a base revision to suites, without a TypeScript build:
-- A change confined to one feature runs that feature's suite.
-- A change to shared code, the harness, setup scripts, plugin configuration, dependencies, or an unrecognized path runs every suite.
-- A change that cannot affect the UI runs none.
+Selecting `affected` SHALL map the files changed against a base revision to suites, using bash only, and SHALL fail asking for explicit suites when there is no git work tree:
+- one feature's source, or one suite's folder, runs that suite;
+- a feature without a suite runs only `navigation`;
+- shared code, harness, setup, plugin configuration, dependencies, or an unknown path runs every suite;
+- a change that cannot affect the UI runs none.
 
 #### Scenario: Feature-only change
 - **WHEN** a diff touches only alerting feature source
@@ -162,9 +167,17 @@ Selecting `affected` SHALL map the files changed against a base revision to suit
 - **WHEN** a diff touches shared frontend code or `web/package.json`
 - **THEN** every suite runs
 
+#### Scenario: Suite-only change
+- **WHEN** a diff touches only files under `web/e2e/metrics/`
+- **THEN** only the `metrics` suite runs
+
 #### Scenario: Documentation-only change
-- **WHEN** a diff touches only Markdown files outside `web/e2e`
+- **WHEN** a diff touches only Markdown files
 - **THEN** no suite runs, and the command exits zero
+
+#### Scenario: No git work tree
+- **WHEN** `affected` is selected where there is no git history, such as inside the CI image
+- **THEN** the entry point exits non-zero before running tests and asks for explicit suites
 
 ### Requirement: Tags only for cross-cutting concerns
 Tags SHALL be used only for concerns that span suites, and SHALL NOT name a feature, an environment, or a test status. The only tag SHALL be `@smoke`, which marks the fast critical path.
@@ -209,8 +222,8 @@ The Playwright suite SHALL NOT modify, import from, or depend on files under `we
 - **WHEN** the Playwright suite is added
 - **THEN** the existing Cypress run, lint, and type-check commands behave as before
 
-### Requirement: Single entry points
-The suite SHALL run through one npm script and one Make target that also runs setup. The standard frontend lint commands SHALL lint and type-check it.
+### Requirement: Entry points and CI image
+The suite SHALL run through one npm script and one Make target that also runs setup. The standard frontend lint commands SHALL lint and type-check it. The repository SHALL also provide a container image with the browsers, Node, `oc`, the setup scripts, and the E2E sources, which runs setup and the selected suites in CI from a kubeconfig and a CI user file alone.
 
 #### Scenario: Run through Make
 - **WHEN** a user runs the Make target with suite `metrics`
@@ -219,9 +232,6 @@ The suite SHALL run through one npm script and one Make target that also runs se
 #### Scenario: Lint covers E2E code
 - **WHEN** the frontend lint runs
 - **THEN** E2E specs and support files are linted and type-checked
-
-### Requirement: CI container image
-The repository SHALL provide a container image with the browsers, Node, `oc`, the setup scripts, and the E2E sources. It SHALL run setup and the selected suites in CI from a kubeconfig and a CI user file alone.
 
 #### Scenario: One CI job per suite
 - **WHEN** a CI job runs the image with one suite selected
